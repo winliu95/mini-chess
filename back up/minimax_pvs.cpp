@@ -97,92 +97,9 @@ static int get_move_score(State* state, const Move& action, const Move& tt_move 
 }
 
 /*============================================================
- * MiniMax — quiescence
- *
- * Quiescence Search for capturing moves to avoid horizon effect.
- *============================================================*/
-int MiniMax::quiescence(
-    State *state,
-    int alpha,
-    int beta,
-    GameHistory& history,
-    int ply,
-    SearchContext& ctx,
-    const MMParams& p
-) {
-    ctx.nodes++;
-    if(ply > ctx.seldepth){
-        ctx.seldepth = ply;
-    }
-    if(ctx.stop){
-        return 0;
-    }
-
-    int stand_pat = state->evaluate(p.use_kp_eval, p.use_eval_mobility, &history);
-    if (stand_pat >= beta) {
-        return stand_pat;
-    }
-    if (stand_pat > alpha) {
-        alpha = stand_pat;
-    }
-
-    /* === Lazy move generation (sets game_state) === */
-    if (state->legal_actions.empty() && state->game_state == UNKNOWN) {
-        state->get_legal_actions();
-    }
-
-    if (state->game_state == WIN) {
-        return P_MAX - ply;
-    }
-    if (state->game_state == DRAW) {
-        return 0;
-    }
-
-    // Filter only capture moves
-    std::vector<Move> captures;
-    int opp = 1 - state->player;
-    for (const auto& action : state->legal_actions) {
-        int victim = state->piece_at(opp, action.second.first, action.second.second);
-        if (victim > 0) {
-            captures.push_back(action);
-        }
-    }
-
-    // Sort captures by MVV-LVA score
-    if (!captures.empty()) {
-        std::sort(captures.begin(), captures.end(), [&](const Move& a, const Move& b) {
-            return get_move_score(state, a) > get_move_score(state, b);
-        });
-    }
-
-    for (const auto& action : captures) {
-        State* next = state->next_state(action);
-        bool same = next->same_player_as_parent();
-        int raw, score;
-        if (same) {
-            raw = quiescence(next, alpha, beta, history, ply + 1, ctx, p);
-            score = raw;
-        } else {
-            raw = quiescence(next, -beta, -alpha, history, ply + 1, ctx, p);
-            score = -raw;
-        }
-        delete next;
-
-        if (score >= beta) {
-            return score;
-        }
-        if (score > alpha) {
-            alpha = score;
-        }
-    }
-
-    return alpha;
-}
-
-/*============================================================
  * MiniMax — eval_ctx
  *
- * Negamax with PVS, TT, and Quiescence.
+ * Negamax without pruning. Caller manages memory.
  *============================================================*/
 int MiniMax::eval_ctx(
     State *state,
@@ -245,7 +162,9 @@ int MiniMax::eval_ctx(
     }
 
     if(depth <= 0){
-        int score = quiescence(state, alpha, beta, history, ply, ctx, p);
+        int score = state->evaluate(
+            p.use_kp_eval, p.use_eval_mobility, &history
+        );
         history.pop(state->hash());
         return score;
     }

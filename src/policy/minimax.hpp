@@ -28,6 +28,15 @@ public:
         SearchContext& ctx,
         const MMParams& p
     );
+    static int quiescence(
+        State *state,
+        int alpha,
+        int beta,
+        GameHistory& history,
+        int ply,
+        SearchContext& ctx,
+        const MMParams& p
+    );
     static SearchResult search(
         State *state,
         int depth,
