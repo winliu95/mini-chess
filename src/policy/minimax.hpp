@@ -4,7 +4,7 @@
 
 struct MMParams {
     bool use_kp_eval = true;
-    bool use_eval_mobility = true;
+    bool use_eval_mobility = false;
     bool report_partial = true;
 
     static MMParams from_map(const ParamMap& m){
@@ -26,7 +26,8 @@ public:
         GameHistory& history,
         int ply,
         SearchContext& ctx,
-        const MMParams& p
+        const MMParams& p,
+        bool last_was_null = false
     );
     static int quiescence(
         State *state,
@@ -43,6 +44,7 @@ public:
         GameHistory& history,
         SearchContext& ctx
     );
+    static void clear_tt();
 
     static ParamMap default_params();
     static std::vector<ParamDef> param_defs();

@@ -14,6 +14,7 @@
 #include "search_types.hpp"
 #include "../policy/registry.hpp"
 #include "../policy/game_history.hpp"
+#include "../policy/minimax.hpp"
 
 namespace ubgi {
 
@@ -274,6 +275,21 @@ static void do_search(
     GameHistory history,
     int step
 ){
+    MiniMax::clear_tt();
+    if (movetime_ms > 0) {
+        std::thread([movetime_ms, my_gen]() {
+            int64_t limit = movetime_ms * 90 / 100;
+            if (limit > 50) {
+                limit -= 50;
+            }
+            if (limit > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(limit));
+            }
+            if (my_gen == g_search_gen.load()) {
+                g_ctx.stop = true;
+            }
+        }).detach();
+    }
     State state(board, player);
     state.step = step;
     state.get_legal_actions();
@@ -463,7 +479,7 @@ static void do_search(
         }
     }
 
-    if(alive()){
+    if(my_gen == g_search_gen.load()){
         send("bestmove " + move_to_str(best_move));
         g_bestmove_sent = true;
     }
@@ -503,6 +519,7 @@ static void cmd_go(std::istringstream& iss){
     g_ctx.stop = false;
     g_searching = true;
     g_bestmove_sent = false;
+    g_search_gen++;
     uint32_t gen = g_search_gen.load();
     g_best_move = Move();
     g_search_thread = std::thread(
@@ -670,6 +687,7 @@ void loop(){
                 send("bestmove " + move_to_str(g_best_move));
             }
         }else if(cmd == "ucinewgame" || cmd == "ubginewgame"){
+            MiniMax::clear_tt();
             g_board = Board();
             g_player = 0;
             g_step = 0;

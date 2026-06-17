@@ -156,6 +156,9 @@ int MiniMax::quiescence(
     }
 
     for (const auto& action : captures) {
+        if (ctx.stop) {
+            break;
+        }
         State* next = state->next_state(action);
         bool same = next->same_player_as_parent();
         int raw, score;
@@ -192,7 +195,8 @@ int MiniMax::eval_ctx(
     GameHistory& history,
     int ply,
     SearchContext& ctx,
-    const MMParams& p
+    const MMParams& p,
+    bool last_was_null
 ){
     ctx.nodes++;
     if(ply > ctx.seldepth){
@@ -250,6 +254,23 @@ int MiniMax::eval_ctx(
         return score;
     }
 
+    // --- Null Move Pruning (NMP) ---
+    if (depth >= 3 && ply > 0 && !last_was_null) {
+        int static_eval = state->evaluate(p.use_kp_eval, p.use_eval_mobility, &history);
+        if (static_eval >= beta) {
+            BaseState* null_state = state->create_null_state();
+            if (null_state) {
+                int R = (depth > 6) ? 3 : 2;
+                int null_score = -eval_ctx(dynamic_cast<State*>(null_state), depth - 1 - R, -beta, -beta + 1, history, ply + 1, ctx, p, true);
+                delete null_state;
+                if (null_score >= beta) {
+                    history.pop(state->hash());
+                    return null_score;
+                }
+            }
+        }
+    }
+
     // Sort moves using both MVV-LVA and the TT best move
     if(!state->legal_actions.empty()){
         std::sort(state->legal_actions.begin(), state->legal_actions.end(), [&](const Move& a, const Move& b) {
@@ -257,44 +278,87 @@ int MiniMax::eval_ctx(
         });
     }
 
-    /* === Negamax loop (PVS) === */
+    /* === Negamax loop (PVS + LMR) === */
     int best_score = M_MAX;
     Move best_action;
     int orig_alpha = alpha;
-    bool is_first = true;
+    int move_index = 0;
+    int p_side = state->player;
+    int opp_side = 1 - p_side;
 
     for(auto& action : state->legal_actions){
+        if (ctx.stop) {
+            break;
+        }
         State* next = state->next_state(action);
         bool same = next->same_player_as_parent();
         int raw, score;
 
-        if (is_first) {
+        int attacker = state->piece_at(p_side, action.first.first, action.first.second);
+        int victim = state->piece_at(opp_side, action.second.first, action.second.second);
+        bool is_capture = (victim > 0);
+        bool is_promotion = (attacker == 1 && (action.second.first == 0 || (int)action.second.first == state->board_h() - 1));
+
+        if (move_index == 0) {
             // First move: search with full window
             if (same) {
-                raw = eval_ctx(next, depth - 1, alpha, beta, history, ply + 1, ctx, p);
+                raw = eval_ctx(next, depth - 1, alpha, beta, history, ply + 1, ctx, p, false);
                 score = raw;
             } else {
-                raw = eval_ctx(next, depth - 1, -beta, -alpha, history, ply + 1, ctx, p);
+                raw = eval_ctx(next, depth - 1, -beta, -alpha, history, ply + 1, ctx, p, false);
                 score = -raw;
             }
-            is_first = false;
         } else {
-            // Subsequent moves: search with null window
-            if (same) {
-                raw = eval_ctx(next, depth - 1, alpha, alpha + 1, history, ply + 1, ctx, p);
-                score = raw;
+            // Late Move Reduction (LMR)
+            bool lmr_applicable = (depth >= 3 && !same && !is_capture && !is_promotion);
+            int reduction = 0;
+            if (lmr_applicable) {
+                reduction = 1;
+                if (depth >= 5 && move_index >= 4) {
+                    reduction = 2;
+                }
+                if (depth - 1 - reduction < 1) {
+                    reduction = depth - 2;
+                }
+            }
+
+            if (reduction > 0) {
+                if (same) {
+                    raw = eval_ctx(next, depth - 1 - reduction, alpha, alpha + 1, history, ply + 1, ctx, p, false);
+                    score = raw;
+                } else {
+                    raw = eval_ctx(next, depth - 1 - reduction, -alpha - 1, -alpha, history, ply + 1, ctx, p, false);
+                    score = -raw;
+                }
+
+                // Re-search at full depth if reduced search fails high
+                if (score > alpha) {
+                    if (same) {
+                        raw = eval_ctx(next, depth - 1, alpha, alpha + 1, history, ply + 1, ctx, p, false);
+                        score = raw;
+                    } else {
+                        raw = eval_ctx(next, depth - 1, -alpha - 1, -alpha, history, ply + 1, ctx, p, false);
+                        score = -raw;
+                    }
+                }
             } else {
-                raw = eval_ctx(next, depth - 1, -alpha - 1, -alpha, history, ply + 1, ctx, p);
-                score = -raw;
+                // Normal PVS search with null window
+                if (same) {
+                    raw = eval_ctx(next, depth - 1, alpha, alpha + 1, history, ply + 1, ctx, p, false);
+                    score = raw;
+                } else {
+                    raw = eval_ctx(next, depth - 1, -alpha - 1, -alpha, history, ply + 1, ctx, p, false);
+                    score = -raw;
+                }
             }
 
             // If it failed high but didn't cause a beta cutoff, re-search with full window
             if (score > alpha && score < beta) {
                 if (same) {
-                    raw = eval_ctx(next, depth - 1, alpha, beta, history, ply + 1, ctx, p);
+                    raw = eval_ctx(next, depth - 1, alpha, beta, history, ply + 1, ctx, p, false);
                     score = raw;
                 } else {
-                    raw = eval_ctx(next, depth - 1, -beta, -alpha, history, ply + 1, ctx, p);
+                    raw = eval_ctx(next, depth - 1, -beta, -alpha, history, ply + 1, ctx, p, false);
                     score = -raw;
                 }
             }
@@ -312,16 +376,19 @@ int MiniMax::eval_ctx(
         if(alpha >= beta){
             break; // Beta cutoff
         }
+        move_index++;
     }
 
     // --- TT Store ---
-    TTFlag flag = TT_EXACT;
-    if (best_score <= orig_alpha) {
-        flag = TT_ALPHA;
-    } else if (best_score >= beta) {
-        flag = TT_BETA;
+    if (!ctx.stop) {
+        TTFlag flag = TT_EXACT;
+        if (best_score <= orig_alpha) {
+            flag = TT_ALPHA;
+        } else if (best_score >= beta) {
+            flag = TT_BETA;
+        }
+        tt.store(hash_val, depth, value_to_tt(best_score, ply), flag, best_action);
     }
-    tt.store(hash_val, depth, value_to_tt(best_score, ply), flag, best_action);
 
     history.pop(state->hash());
     return best_score;
@@ -339,6 +406,9 @@ SearchResult MiniMax::search(
     SearchContext& ctx
 ){
     ctx.reset();
+    if (depth == 1) {
+        tt.clear();
+    }
     MMParams p = MMParams::from_map(ctx.params);
     SearchResult result;
     result.depth = depth;
@@ -369,6 +439,9 @@ SearchResult MiniMax::search(
     bool is_first = true;
 
     for(auto& action : state->legal_actions){
+        if (ctx.stop) {
+            break;
+        }
         State* next = state->next_state(action);
         bool same   = next->same_player_as_parent();
         int raw, score;
@@ -424,16 +497,23 @@ SearchResult MiniMax::search(
     }
 
     // --- TT Store ---
-    TTFlag flag = TT_EXACT;
-    if (best_score <= orig_alpha) {
-        flag = TT_ALPHA;
-    } else if (best_score >= beta) {
-        flag = TT_BETA;
+    if (!ctx.stop) {
+        TTFlag flag = TT_EXACT;
+        if (best_score <= orig_alpha) {
+            flag = TT_ALPHA;
+        } else if (best_score >= beta) {
+            flag = TT_BETA;
+        }
+        tt.store(hash_val, depth, value_to_tt(best_score, 0), flag, result.best_move);
     }
-    tt.store(hash_val, depth, value_to_tt(best_score, 0), flag, result.best_move);
 
     result.nodes = ctx.nodes;
+    result.seldepth = ctx.seldepth;
     return result;
+}
+
+void MiniMax::clear_tt() {
+    tt.clear();
 }
 
 /*============================================================
@@ -442,7 +522,7 @@ SearchResult MiniMax::search(
 ParamMap MiniMax::default_params(){
     return {
         {"UseKPEval", "true"},
-        {"UseEvalMobility", "true"},
+        {"UseEvalMobility", "false"},
         {"ReportPartial", "true"},
     };
 }
@@ -450,7 +530,7 @@ ParamMap MiniMax::default_params(){
 std::vector<ParamDef> MiniMax::param_defs(){
     return {
         {"UseKPEval", ParamDef::CHECK, "true"},
-        {"UseEvalMobility", ParamDef::CHECK, "true"},
+        {"UseEvalMobility", ParamDef::CHECK, "false"},
         {"ReportPartial", ParamDef::CHECK, "true"},
     };
 }

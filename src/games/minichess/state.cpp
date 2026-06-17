@@ -14,11 +14,17 @@
  * Always compiled. Toggled at runtime via use_kp_eval param.
  *============================================================*/
 
-// KP material (10x scale for fine positional granularity)
+// KP material (referee rules)
 static const int kp_material[7] = {0, 20, 60, 70, 80, 200, 1000};
 
-// Material-only (simple scale)
+// Standard material for mid-game (Rook > Bishop/Knight)
+static const int kp_material_standard[7] = {0, 20, 100, 60, 60, 180, 1000};
+
+// Material-only (simple scale, referee rules)
 static const int simple_material[7] = {0, 2, 6, 7, 8, 20, 100};
+
+// Standard simple material for mid-game
+static const int simple_material_standard[7] = {0, 2, 10, 6, 6, 18, 100};
 
 // Piece-Square Tables (white perspective, mirror for black)
 static const int pst[6][BOARD_H][BOARD_W] = {
@@ -154,6 +160,24 @@ int State::evaluate(
 
     auto self_board = this->board.board[this->player];
     auto oppn_board = this->board.board[1 - this->player];
+
+    // Dynamic Material Values Redesign:
+    // If we have reached the 50-move limit (100 steps), evaluate using the referee's 
+    // exact material rules (no PST, tropism, or mobility).
+    if(this->step >= 100){
+        int self_score = 0, oppn_score = 0;
+        const int* mat_table = use_kp_eval ? kp_material : simple_material;
+        for(int r = 0; r < BOARD_H; r++){
+            for(int c = 0; c < BOARD_W; c++){
+                int p_self = self_board[r][c];
+                if(p_self > 0 && p_self <= 6) self_score += mat_table[p_self];
+                int p_oppn = oppn_board[r][c];
+                if(p_oppn > 0 && p_oppn <= 6) oppn_score += mat_table[p_oppn];
+            }
+        }
+        return self_score - oppn_score;
+    }
+
     int self_score = 0, oppn_score = 0;
 
     if(use_kp_eval){
@@ -176,7 +200,7 @@ int State::evaluate(
                 int p_self = self_board[r][c];
                 if(p_self > 0 && p_self <= 6){
                     int pst_row = (this->player == 0) ? r : BOARD_H - 1 - r;
-                    self_score += kp_material[p_self] + pst[p_self - 1][pst_row][c];
+                    self_score += kp_material_standard[p_self] + pst[p_self - 1][pst_row][c];
                     if(oppn_kr != -1){
                         self_score += king_tropism(p_self, r, c, oppn_kr, oppn_kc);
                     }
@@ -184,7 +208,7 @@ int State::evaluate(
                 int p_oppn = oppn_board[r][c];
                 if(p_oppn > 0 && p_oppn <= 6){
                     int pst_row = (this->player == 0) ? BOARD_H - 1 - r : r;
-                    oppn_score += kp_material[p_oppn] + pst[p_oppn - 1][pst_row][c];
+                    oppn_score += kp_material_standard[p_oppn] + pst[p_oppn - 1][pst_row][c];
                     if(self_kr != -1){
                         oppn_score += king_tropism(p_oppn, r, c, self_kr, self_kc);
                     }
@@ -199,9 +223,9 @@ int State::evaluate(
         for(int r = 0; r < BOARD_H; r++){
             for(int c = 0; c < BOARD_W; c++){
                 int p_self = self_board[r][c];
-                if(p_self > 0 && p_self <= 6) self_score += simple_material[p_self];
+                if(p_self > 0 && p_self <= 6) self_score += simple_material_standard[p_self];
                 int p_oppn = oppn_board[r][c];
-                if(p_oppn > 0 && p_oppn <= 6) oppn_score += simple_material[p_oppn];
+                if(p_oppn > 0 && p_oppn <= 6) oppn_score += simple_material_standard[p_oppn];
             }
         }
     }
@@ -221,7 +245,8 @@ int State::evaluate(
         bonus += 2 * (self_mobility - oppn_mobility);
     }
 
-    // Monte Carlo Rollout blend
+    // Monte Carlo Rollout blend (DISABLED: non-deterministic and extremely slow, causes search instability and ruins TT/Alpha-Beta)
+    /*
     const int N_ROLLOUTS  = 5;
     const int REMAINING_PLIES = 100 - this->step;
     const int ROLLOUT_SCALE = 200;
@@ -232,6 +257,7 @@ int State::evaluate(
     }
 
     bonus += (rollout_sum * ROLLOUT_SCALE) / N_ROLLOUTS;
+    */
 
     return self_score - oppn_score + bonus;
 }
@@ -789,6 +815,7 @@ std::string State::encode_state(){
 
 BaseState* State::create_null_state() const{
     State* s = new State(this->board, 1 - this->player);
+    s->step = this->step;
     s->get_legal_actions();
     return s;
 }
