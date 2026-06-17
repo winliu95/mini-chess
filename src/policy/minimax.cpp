@@ -54,6 +54,14 @@ private:
 
 static TranspositionTable tt;
 
+static Move killer_moves[100][2];
+static int history_table[2][30][30];
+
+static void clear_ordering_heuristics() {
+    std::fill(&killer_moves[0][0], &killer_moves[0][0] + sizeof(killer_moves) / sizeof(Move), Move{});
+    std::fill(&history_table[0][0][0], &history_table[0][0][0] + sizeof(history_table) / sizeof(int), 0);
+}
+
 constexpr int MATE_THRESHOLD = 99000;
 
 inline int value_to_tt(int score, int ply) {
@@ -68,7 +76,7 @@ inline int value_from_tt(int score, int ply) {
     return score;
 }
 
-static int get_move_score(State* state, const Move& action, const Move& tt_move = {}) {
+static int get_move_score(State* state, const Move& action, int ply, const Move& tt_move = {}) {
     if (action == tt_move) {
         return 2000000;
     }
@@ -89,8 +97,19 @@ static int get_move_score(State* state, const Move& action, const Move& tt_move 
         int attacker_val = (attacker >= 0 && attacker <= 6) ? PIECE_VALUES[attacker] : 0;
         score = 1000000 + (victim_val * 100) - attacker_val;
     } else {
-        if (attacker == 1 && (to_r == 0 || to_r == state->board_h() - 1)) {
+        if (attacker == 1 && (to_r == 0 || (int)to_r == state->board_h() - 1)) {
             score = 500000;
+        } else {
+            if (ply < 100) {
+                if (action == killer_moves[ply][0]) {
+                    score = 400000;
+                } else if (action == killer_moves[ply][1]) {
+                    score = 300000;
+                }
+            }
+            int from_sq = from_r * 5 + from_c;
+            int to_sq = to_r * 5 + to_c;
+            score += history_table[p][from_sq][to_sq];
         }
     }
     return score;
@@ -151,7 +170,7 @@ int MiniMax::quiescence(
     // Sort captures by MVV-LVA score
     if (!captures.empty()) {
         std::sort(captures.begin(), captures.end(), [&](const Move& a, const Move& b) {
-            return get_move_score(state, a) > get_move_score(state, b);
+            return get_move_score(state, a, ply) > get_move_score(state, b, ply);
         });
     }
 
@@ -274,7 +293,7 @@ int MiniMax::eval_ctx(
     // Sort moves using both MVV-LVA and the TT best move
     if(!state->legal_actions.empty()){
         std::sort(state->legal_actions.begin(), state->legal_actions.end(), [&](const Move& a, const Move& b) {
-            return get_move_score(state, a, tt_move) > get_move_score(state, b, tt_move);
+            return get_move_score(state, a, ply, tt_move) > get_move_score(state, b, ply, tt_move);
         });
     }
 
@@ -374,6 +393,15 @@ int MiniMax::eval_ctx(
             alpha = best_score;
         }
         if(alpha >= beta){
+            if (!is_capture && ply < 100) {
+                if (killer_moves[ply][0] != action) {
+                    killer_moves[ply][1] = killer_moves[ply][0];
+                    killer_moves[ply][0] = action;
+                }
+                int from_sq = action.first.first * 5 + action.first.second;
+                int to_sq = action.second.first * 5 + action.second.second;
+                history_table[p_side][from_sq][to_sq] += depth * depth;
+            }
             break; // Beta cutoff
         }
         move_index++;
@@ -408,6 +436,7 @@ SearchResult MiniMax::search(
     ctx.reset();
     if (depth == 1) {
         tt.clear();
+        clear_ordering_heuristics();
     }
     MMParams p = MMParams::from_map(ctx.params);
     SearchResult result;
@@ -426,7 +455,7 @@ SearchResult MiniMax::search(
 
     if(!state->legal_actions.empty()){
         std::sort(state->legal_actions.begin(), state->legal_actions.end(), [&](const Move& a, const Move& b) {
-            return get_move_score(state, a, tt_move) > get_move_score(state, b, tt_move);
+            return get_move_score(state, a, 0, tt_move) > get_move_score(state, b, 0, tt_move);
         });
     }
 
@@ -449,30 +478,30 @@ SearchResult MiniMax::search(
         if (is_first) {
             // First move: search with full window
             if (same) {
-                raw = eval_ctx(next, depth - 1, alpha, beta, history, 1, ctx, p);
+                raw = eval_ctx(next, depth - 1, alpha, beta, history, 1, ctx, p, false);
                 score = raw;
             } else {
-                raw = eval_ctx(next, depth - 1, -beta, -alpha, history, 1, ctx, p);
+                raw = eval_ctx(next, depth - 1, -beta, -alpha, history, 1, ctx, p, false);
                 score = -raw;
             }
             is_first = false;
         } else {
             // Subsequent moves: search with null window
             if (same) {
-                raw = eval_ctx(next, depth - 1, alpha, alpha + 1, history, 1, ctx, p);
+                raw = eval_ctx(next, depth - 1, alpha, alpha + 1, history, 1, ctx, p, false);
                 score = raw;
             } else {
-                raw = eval_ctx(next, depth - 1, -alpha - 1, -alpha, history, 1, ctx, p);
+                raw = eval_ctx(next, depth - 1, -alpha - 1, -alpha, history, 1, ctx, p, false);
                 score = -raw;
             }
 
             // If it failed high but didn't cause a beta cutoff, re-search with full window
             if (score > alpha && score < beta) {
                 if (same) {
-                    raw = eval_ctx(next, depth - 1, alpha, beta, history, 1, ctx, p);
+                    raw = eval_ctx(next, depth - 1, alpha, beta, history, 1, ctx, p, false);
                     score = raw;
                 } else {
-                    raw = eval_ctx(next, depth - 1, -beta, -alpha, history, 1, ctx, p);
+                    raw = eval_ctx(next, depth - 1, -beta, -alpha, history, 1, ctx, p, false);
                     score = -raw;
                 }
             }

@@ -63,6 +63,28 @@ static int king_tropism(
     return 0;
 }
 
+static bool is_passed_pawn(const Board& board, int player, int r, int c) {
+    int opp = 1 - player;
+    if (player == 0) {
+        for (int row = r - 1; row >= 0; --row) {
+            for (int col = std::max(0, c - 1); col <= std::min(BOARD_W - 1, c + 1); ++col) {
+                if (board.board[opp][row][col] == 1) {
+                    return false;
+                }
+            }
+        }
+    } else {
+        for (int row = r + 1; row < BOARD_H; ++row) {
+            for (int col = std::max(0, c - 1); col <= std::min(BOARD_W - 1, c + 1); ++col) {
+                if (board.board[opp][row][col] == 1) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 
 /*============================================================
  * evaluate() — runtime-selectable eval strategy
@@ -204,6 +226,13 @@ int State::evaluate(
                     if(oppn_kr != -1){
                         self_score += king_tropism(p_self, r, c, oppn_kr, oppn_kc);
                     }
+                    if (p_self == 1 && is_passed_pawn(this->board, this->player, r, c)) {
+                        int advance = (this->player == 0) ? (4 - r) : (r - 1);
+                        if (advance == 1) self_score += 5;
+                        else if (advance == 2) self_score += 15;
+                        else if (advance == 3) self_score += 30;
+                        else if (advance == 4) self_score += 55;
+                    }
                 }
                 int p_oppn = oppn_board[r][c];
                 if(p_oppn > 0 && p_oppn <= 6){
@@ -211,6 +240,13 @@ int State::evaluate(
                     oppn_score += kp_material_standard[p_oppn] + pst[p_oppn - 1][pst_row][c];
                     if(self_kr != -1){
                         oppn_score += king_tropism(p_oppn, r, c, self_kr, self_kc);
+                    }
+                    if (p_oppn == 1 && is_passed_pawn(this->board, 1 - this->player, r, c)) {
+                        int advance = (this->player == 0) ? (r - 1) : (4 - r);
+                        if (advance == 1) oppn_score += 5;
+                        else if (advance == 2) oppn_score += 15;
+                        else if (advance == 3) oppn_score += 30;
+                        else if (advance == 4) oppn_score += 55;
                     }
                 }
             }
