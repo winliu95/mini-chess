@@ -133,7 +133,7 @@ int MiniMax::quiescence(
     if(ply > ctx.seldepth){
         ctx.seldepth = ply;
     }
-    if(ctx.stop){
+    if(ctx.check_time()){
         return 0;
     }
 
@@ -221,7 +221,7 @@ int MiniMax::eval_ctx(
     if(ply > ctx.seldepth){
         ctx.seldepth = ply;
     }
-    if(ctx.stop){
+    if(ctx.check_time()){
         return 0;
     }
 

@@ -276,19 +276,14 @@ static void do_search(
     int step
 ){
     MiniMax::clear_tt();
+    ctx.start_time = std::chrono::steady_clock::now();
+    ctx.time_limit_ms = 0;
     if (movetime_ms > 0) {
-        std::thread([movetime_ms, my_gen]() {
-            int64_t limit = movetime_ms * 90 / 100;
-            if (limit > 50) {
-                limit -= 50;
-            }
-            if (limit > 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(limit));
-            }
-            if (my_gen == g_search_gen.load()) {
-                g_ctx.stop = true;
-            }
-        }).detach();
+        int64_t limit = movetime_ms * 90 / 100;
+        if (limit > 50) {
+            limit -= 50;
+        }
+        ctx.time_limit_ms = limit;
     }
     State state(board, player);
     state.step = step;
@@ -430,6 +425,8 @@ static void do_search(
 
                 SearchContext sub_ctx;
                 sub_ctx.params = ctx.params;
+                sub_ctx.start_time = ctx.start_time;
+                sub_ctx.time_limit_ms = ctx.time_limit_ms;
                 SearchResult sub = g_algo->search(&state, depth, history, sub_ctx);
 
                 if(!alive()){

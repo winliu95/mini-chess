@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdint>
 #include <functional>
+#include <chrono>
 
 class State;
 
@@ -21,6 +22,22 @@ struct SearchContext {
     bool stop = false;
     ParamMap params;
     std::function<void(const RootUpdate&)> on_root_update;
+
+    std::chrono::steady_clock::time_point start_time;
+    int64_t time_limit_ms = 0;
+
+    bool check_time() {
+        if (stop) return true;
+        if (time_limit_ms > 0 && (nodes & 2047) == 0) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
+            if (elapsed >= time_limit_ms) {
+                stop = true;
+                return true;
+            }
+        }
+        return false;
+    }
 
     void reset(){
         nodes = 0;
