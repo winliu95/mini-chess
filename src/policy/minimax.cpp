@@ -434,10 +434,7 @@ SearchResult MiniMax::search(
     SearchContext& ctx
 ){
     ctx.reset();
-    if (depth == 1) {
-        tt.clear();
-        clear_ordering_heuristics();
-    }
+    // removed tt.clear() and clear_ordering_heuristics() at depth 1 to preserve cross-turn memory
     MMParams p = MMParams::from_map(ctx.params);
     SearchResult result;
     result.depth = depth;
@@ -508,6 +505,10 @@ SearchResult MiniMax::search(
         }
 
         delete next;
+
+        if (ctx.stop) {
+            break;
+        }
 
         if(score > best_score){
             best_score        = score;
